@@ -24,7 +24,7 @@
     "neo4j"
   ],
   "author": "Your Name",
-  "license": "MIT",
+  "license": "GPL-3.0",
   "dependencies": {
     "@mistralai/mistralai": "^1.5.0",
     "axios": "^1.6.2",

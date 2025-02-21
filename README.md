@@ -3,7 +3,7 @@
   <h1>🛡️ MSH CLI</h1>
   <p><em>Advanced AI-Powered Security Testing & Analysis Framework</em></p>
 
-  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
   [![Platform](https://img.shields.io/badge/platform-Kali%20Linux%20%7C%20Ubuntu-blue)](https://www.kali.org/)
   [![Node.js Version](https://img.shields.io/badge/node-%3E%3D%2016.0.0-brightgreen)](https://nodejs.org/)
   [![Mistral AI](https://img.shields.io/badge/AI-Mistral-purple)](https://mistral.ai/)
@@ -270,7 +270,35 @@ See our [Security Policy](SECURITY.md) for details.
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MSH CLI - Advanced AI-Powered Security Testing & Analysis Framework
+Copyright (C) 2024 MSH CLI Contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+### Third-Party Components
+
+MSH CLI includes several third-party components that are licensed under their respective open-source licenses:
+
+- **Node.js Packages**: Various licenses (MIT, Apache, etc.) - See `package.json` for details
+- **Security Tools**: Various licenses - See individual tool documentation
+- **AI Models**: Mistral AI - See Mistral's terms of service
+
+### Contributing
+
+By contributing to MSH CLI, you agree that your contributions will be licensed under the GPLv3 License.
+
+For more details, see the [LICENSE](LICENSE) file in the repository.
 
 ---
 
