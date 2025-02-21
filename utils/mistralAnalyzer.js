@@ -2,6 +2,56 @@ const { Mistral } = require("@mistralai/mistralai");
 const colors = require('./colors');
 
 class MistralAnalyzer {
+    constructor(apiKey) {
+        this.client = new Mistral({
+            apiKey: apiKey
+        });
+    }
+
+    async analyzeOutput(output, type = 'detailed') {
+        try {
+            const context = type === 'summary' ? this.getSummaryPrompt(output) : this.getDetailedPrompt(output);
+            
+            const response = await this.client.chat.complete({
+                model: "mistral-small-latest",
+                messages: [{ role: "user", content: context }],
+                stream: false
+            });
+
+            return response.choices[0].message.content;
+        } catch (error) {
+            throw new Error(`Analysis failed: ${error.message}`);
+        }
+    }
+
+    getDetailedPrompt(output) {
+        return `Analyze this command output from a security perspective:
+
+${output}
+
+Provide:
+1. Security implications
+2. Potential vulnerabilities or risks
+3. Recommended security measures
+4. Related security tools to investigate
+5. Notable patterns or indicators
+`;
+    }
+
+    getSummaryPrompt(output) {
+        return `Provide a brief security-focused summary of this command output:
+
+${output}
+
+Focus on key security findings and immediate actions needed.`;
+    }
+
+    async analyzeWithContext(output, context) {
+        // Add context-aware analysis here
+        const prompt = `Analyze this output with the following context: ${context}\n\nOutput: ${output}`;
+        return this.analyzeOutput(prompt);
+    }
+
     static async analyzeWithMistral(apiKey, content, graphContext = null) {
         // Validate parameters
         if (!apiKey) throw new Error('API key is required');
@@ -165,6 +215,11 @@ Please format the response in a clear, structured manner.
 }
 
 module.exports = {
+    MistralAnalyzer,
+    analyzeOutput: (output, type) => {
+        const analyzer = new MistralAnalyzer(process.env.MISTRAL_API_KEY);
+        return analyzer.analyzeOutput(output, type);
+    },
     analyzeWithMistral: MistralAnalyzer.analyzeWithMistral,
     chatWithMistral: MistralAnalyzer.chatWithMistral
 }; 

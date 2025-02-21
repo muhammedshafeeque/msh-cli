@@ -2,7 +2,7 @@ const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
 const colors = require('./colors');
-const { analyzeWithMistral } = require('./mistralAnalyzer');
+const { analyzeWithMistral, analyzeOutput } = require('./mistralAnalyzer');
 const { storeInNeo4j } = require('./neo4jHandler');
 const SearchCommands = require('./searchCommands');
 const CodeAnalyzer = require('./codeAnalyzer');
@@ -499,4 +499,107 @@ class CommandExecutor {
     }
 }
 
-module.exports = CommandExecutor; 
+// Add a variable to store the last command output for analysis
+let lastCommandOutput = '';
+
+async function executeCommand(command) {
+    try {
+        // Handle empty commands
+        if (!command || command.trim() === '') {
+            return true;
+        }
+
+        // Handle special commands
+        const specialCommands = {
+            'exit': () => {
+                console.log(colors.success('\nGoodbye! 👋'));
+                process.exit(0);
+            },
+            'clear': () => {
+                console.clear();
+                return true;
+            },
+            'help': () => {
+                showHelp();
+                return true;
+            }
+        };
+
+        // Check for search command
+        if (command.startsWith('search')) {
+            const query = command.replace(/^search\s+/, '');
+            await SearchCommands.executeSearch(query);
+            return true;
+        }
+
+        // Handle special commands
+        if (specialCommands[command]) {
+            return specialCommands[command]();
+        }
+
+        // Execute system command
+        console.log(colors.command(`\n📎 Executing: ${command}`));
+        const { stdout, stderr } = await execPromise(command);
+        
+        // Store the output for later analysis
+        lastCommandOutput = stdout || stderr;
+        
+        // Display the output
+        if (stdout) {
+            console.log('\nCommand Output:');
+            console.log(stdout);
+        }
+        
+        if (stderr) {
+            console.log(colors.warning('\nCommand Warnings/Errors:'));
+            console.log(colors.errorOutput(stderr));
+        }
+        
+        return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            console.error(colors.error('\n❌ Error: Command not found'));
+        } else {
+            console.error(colors.error('\n❌ Error:'), colors.errorOutput(error.message));
+        }
+        return false;
+    }
+}
+
+async function handleAnalysisCommand(command) {
+    if (!lastCommandOutput) {
+        console.log(colors.warning('No previous command output to analyze.'));
+        return;
+    }
+
+    try {
+        if (command === 'anls') {
+            console.log(colors.info('\nAnalyzing last command output...'));
+            const analysis = await analyzeOutput(lastCommandOutput);
+            console.log(colors.header('\n📊 Analysis Results:'));
+            console.log(colors.analysis(analysis));
+        } else if (command === 'summary') {
+            console.log(colors.info('\nGenerating summary of last command...'));
+            const analysis = await analyzeOutput(lastCommandOutput, 'summary');
+            console.log(colors.header('\n📝 Summary:'));
+            console.log(colors.analysis(analysis));
+        }
+    } catch (error) {
+        console.error(colors.error('\nAnalysis Error:'), colors.errorOutput(error.message));
+    }
+}
+
+function showHelp() {
+    console.log(colors.header('\n🎭 MASK Commands Help'));
+    console.log(colors.info('----------------------------------------'));
+    console.log(colors.subHeader('Analysis Commands:'));
+    console.log(colors.helpCommand('anls', 'Analyze last command output'));
+    console.log(colors.helpCommand('summary', 'Get brief summary of last command'));
+    console.log(colors.helpCommand('search <term>', 'Search for exploits and vulnerabilities'));
+    // ... add more help content
+}
+
+module.exports = {
+    executeCommand,
+    handleAnalysisCommand
+}; 

@@ -56,7 +56,15 @@ const colors = {
     },
 
     // Analysis section
-    analysisSection: (title, content) => `${chalk.yellow.bold(title)}:\n${chalk.cyan(content)}\n`
+    analysisSection: (title, content) => `${chalk.yellow.bold(title)}:\n${chalk.cyan(content)}\n`,
+
+    critical: (text) => chalk.red.bold(text),
+    high: (text) => chalk.red(text),
+    medium: (text) => chalk.yellow(text),
+    low: (text) => chalk.green(text),
+    table: (text) => chalk.cyan(text),
+    year: (text) => chalk.blue.bold(text),
+    analysis: (text) => chalk.cyan(text)
 };
 
 module.exports = colors; 

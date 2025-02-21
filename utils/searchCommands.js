@@ -6,6 +6,9 @@ const cheerio = require('cheerio');
 const { Builder, By, until } = require('selenium-webdriver');
 const chrome = require('selenium-webdriver/chrome');
 const colors = require('./colors');
+const axios = require('axios');
+const { execSync } = require('child_process');
+const { MistralAnalyzer } = require('./mistralAnalyzer');
 
 class SearchCommands {
     static async launchBrowser() {
@@ -172,136 +175,133 @@ class SearchCommands {
     }
 
     static async searchSecurityBlogs(query) {
-        const blogs = [
-            {
-                url: 'https://www.rapid7.com/blog/search/',
-                selectors: {
-                    results: '.blog-post',
-                    title: '.blog-post-title',
-                    description: '.blog-post-excerpt',
-                    link: '.blog-post-title a'
+        try {
+            // Search multiple security blogs
+            const blogs = [
+                'https://portswigger.net/research',
+                'https://www.rapid7.com/blog',
+                'https://www.hackerone.com/blog'
+            ];
+
+            const results = await Promise.all(blogs.map(async (blog) => {
+                try {
+                    const response = await axios.get(`${blog}/search?q=${encodeURIComponent(query)}`);
+                    return {
+                        source: blog,
+                        content: response.data
+                    };
+                } catch (error) {
+                    return null;
                 }
-            },
-            {
-                url: 'https://www.securityfocus.com/search',
-                selectors: {
-                    results: '.result-item',
-                    title: '.title',
-                    description: '.description',
-                    link: '.title a'
-                }
-            }
-        ];
+            }));
 
-        const results = [];
-        for (const blog of blogs) {
-            const browser = await this.launchBrowser();
-            try {
-                const page = await browser.newPage();
-                await this.navigateToPage(page, `${blog.url}${encodeURIComponent(query)}`);
-
-                const blogResults = await page.evaluate((selectors) => {
-                    return Array.from(document.querySelectorAll(selectors.results)).map(item => ({
-                        title: item.querySelector(selectors.title)?.textContent?.trim(),
-                        description: item.querySelector(selectors.description)?.textContent?.trim(),
-                        link: item.querySelector(selectors.link)?.href
-                    })).filter(r => r.title && r.link);
-                }, blog.selectors);
-
-                results.push(...blogResults);
-            } catch (error) {
-                console.log(colors.warning(`Failed to scrape ${blog.url}: ${error.message}`));
-            } finally {
-                await browser.close();
-            }
+            return {
+                platform: 'Security Blogs',
+                success: true,
+                results: results.filter(r => r !== null)
+            };
+        } catch (error) {
+            return {
+                platform: 'Security Blogs',
+                success: false,
+                error: error.message
+            };
         }
-
-        return {
-            success: true,
-            platform: 'Security Blogs',
-            results: results.slice(0, 5)
-        };
     }
 
     static async searchCVE(query) {
-        const browser = await puppeteer.launch({ headless: 'new' });
         try {
-            const page = await browser.newPage();
-            await page.goto(`https://cve.mitre.org/cgi-bin/cvekey.cgi?keyword=${query}`);
-            
-            const cveResults = await page.evaluate(() => {
-                const cves = document.querySelectorAll('tr');
-                return Array.from(cves).map(cve => ({
-                    id: cve.querySelector('td:first-child')?.textContent,
-                    description: cve.querySelector('td:last-child')?.textContent
-                })).filter(result => result.id && result.description);
-            });
-
+            const response = await axios.get(`https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=${encodeURIComponent(query)}`);
             return {
-                success: true,
                 platform: 'CVE Database',
-                results: cveResults
+                success: true,
+                results: response.data
             };
-        } finally {
-            await browser.close();
+        } catch (error) {
+            return {
+                platform: 'CVE Database',
+                success: false,
+                error: error.message
+            };
         }
     }
 
     static async searchGitHub(query) {
-        const browser = await puppeteer.launch({ headless: 'new' });
         try {
-            const page = await browser.newPage();
-            await page.goto(`https://github.com/search?q=${encodeURIComponent(query)}&type=repositories`);
-            
-            const repos = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll('.repo-list-item')).map(repo => ({
-                    name: repo.querySelector('a')?.textContent,
-                    description: repo.querySelector('p')?.textContent,
-                    url: 'https://github.com' + repo.querySelector('a')?.getAttribute('href'),
-                    stars: repo.querySelector('.muted-link')?.textContent
-                }));
-            });
+            const response = await axios.get(
+                `https://api.github.com/search/repositories?q=${encodeURIComponent(query)}+security`,
+                {
+                    headers: {
+                        'Accept': 'application/vnd.github.v3+json',
+                        // Add GitHub token if available
+                        ...(process.env.GITHUB_TOKEN && {
+                            'Authorization': `token ${process.env.GITHUB_TOKEN}`
+                        })
+                    }
+                }
+            );
 
             return {
-                success: true,
                 platform: 'GitHub',
-                results: repos
+                success: true,
+                results: response.data.items.map(item => ({
+                    name: item.full_name,
+                    description: item.description,
+                    url: item.html_url,
+                    stars: item.stargazers_count
+                }))
             };
-        } finally {
-            await browser.close();
+        } catch (error) {
+            return {
+                platform: 'GitHub',
+                success: false,
+                error: error.message
+            };
         }
     }
 
     static async searchGoogle(query) {
-        console.log(colors.info('Searching Google...'));
-        const browser = await this.launchBrowser();
         try {
-            const page = await browser.newPage();
-            await page.goto(`https://www.google.com/search?q=${encodeURIComponent(query)}+security+vulnerability`);
-            
-            const results = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll('.g')).map(result => ({
-                    title: result.querySelector('h3')?.textContent,
-                    description: result.querySelector('.VwiC3b')?.textContent,
-                    link: result.querySelector('a')?.href
-                })).filter(r => r.title && r.description && r.link);
-            });
+            // Using Custom Search API if key is available
+            if (process.env.GOOGLE_API_KEY && process.env.GOOGLE_CX) {
+                const response = await axios.get(
+                    `https://www.googleapis.com/customsearch/v1`,
+                    {
+                        params: {
+                            key: process.env.GOOGLE_API_KEY,
+                            cx: process.env.GOOGLE_CX,
+                            q: `${query} security vulnerability exploit`,
+                        }
+                    }
+                );
 
-            return {
-                success: true,
-                platform: 'Google',
-                results: results.slice(0, 5)
-            };
+                return {
+                    platform: 'Google',
+                    success: true,
+                    results: response.data.items.map(item => ({
+                        title: item.title,
+                        snippet: item.snippet,
+                        link: item.link
+                    }))
+                };
+            } else {
+                // Fallback to web scraping
+                const response = await axios.get(
+                    `https://www.google.com/search?q=${encodeURIComponent(query)}+security+vulnerability`
+                );
+                // Parse response HTML here
+                return {
+                    platform: 'Google',
+                    success: true,
+                    results: 'Google search results (API key not configured)'
+                };
+            }
         } catch (error) {
-            console.error(colors.error('Google search error:'), error.message);
             return {
-                success: false,
                 platform: 'Google',
-                results: [],
+                success: false,
                 error: error.message
             };
-        } finally {
-            await browser.close();
         }
     }
 
@@ -431,7 +431,7 @@ class SearchCommands {
                 output += colors.info('----------------------------------------\n');
                 result.results.forEach(item => {
                     output += colors.highlight(`\n${item.title}\n`);
-                    output += colors.commandOutput(`${item.description}\n`);
+                    output += colors.commandOutput(`${item.snippet}\n`);
                     output += colors.path(`URL: ${item.link}\n`);
                 });
                 break;
@@ -460,289 +460,421 @@ class SearchCommands {
         return output;
     }
 
-    static async analyzeSearchResults(results, query) {
-        return `
-Search Analysis for: "${query}"
-
-Total Results Found:
-${results.map(r => `- ${r.platform}: ${r.results.length} results`).join('\n')}
-
-Key Findings by Platform:
-
-${results.map(r => `
-${r.platform}:
-${r.results.slice(0, 3).map(item => `- ${item.title || item.id || 'Untitled'}`).join('\n')}`).join('\n')}
-
-Please provide a comprehensive security analysis including:
-1. Security Implications
-   - Potential threats identified
-   - Known vulnerabilities
-   - Attack vectors
-
-2. Risk Assessment
-   - Severity levels
-   - Exploitation potential
-   - Impact analysis
-
-3. Technical Details
-   - Affected systems/versions
-   - Attack mechanisms
-   - Technical vulnerabilities
-
-4. Mitigation Strategies
-   - Security patches
-   - Preventive measures
-   - Best practices
-
-5. Additional Resources
-   - Related CVEs
-   - Security tools
-   - Further reading
-
-6. Timeline & History
-   - Discovery dates
-   - Patch availability
-   - Notable incidents
-`;
-    }
-
-    static getPentestCommands() {
-        return {
-            'category': {
-                description: 'Category Description',
-                subcommands: {
-                    'tool-name': 'tool-command',
-                }
-            }
-        };
-    }
-
-    static async checkSetup() {
+    static async analyzeSearchQuery(query) {
         try {
-            // Test browser launch
-            const browser = await this.launchBrowser();
-            await browser.close();
+            const analyzer = new MistralAnalyzer(process.env.MISTRAL_API_KEY);
+            const analysisPrompt = `
+Analyze this security search query: "${query}"
+
+Provide a JSON object with the following structure:
+{
+    "category": "type of search (e.g., software vulnerability, exploit, technique, tool)",
+    "components": ["list of key components to search for"],
+    "relatedTerms": ["related terms and variations"],
+    "specificVersions": ["version numbers to look for"],
+    "recommendedSources": ["suggested security databases"]
+}
+
+Return only the JSON object, no markdown or additional text.
+`;
+            const analysis = await analyzer.analyzeOutput(analysisPrompt);
             
-            // Test searchsploit
-            await execPromise('which searchsploit');
+            // Clean the response to extract only the JSON part
+            const jsonStr = analysis.replace(/```json\s*|\s*```/g, '')  // Remove markdown code blocks
+                .replace(/[\u200B-\u200D\uFEFF]/g, '')  // Remove zero-width spaces
+                .trim();  // Remove extra whitespace
             
-            return true;
+            try {
+                return JSON.parse(jsonStr);
+            } catch (parseError) {
+                console.error(colors.error('Failed to parse AI response:'), colors.errorOutput(jsonStr));
+                // Return a default analysis structure
+                return {
+                    category: "security search",
+                    components: [query],
+                    relatedTerms: [],
+                    specificVersions: [],
+                    recommendedSources: ["ExploitDB", "CVE", "Security Blogs"]
+                };
+            }
         } catch (error) {
-            console.log(colors.warning('\nSome search features may be limited. To enable all features:'));
-            console.log(colors.info('\n1. Install searchsploit:'));
-            console.log(colors.commandOutput('   sudo apt-get update && sudo apt-get install -y exploitdb'));
-            console.log(colors.info('\n2. Install Chrome dependencies:'));
-            console.log(colors.commandOutput('   sudo apt-get install -y chromium-browser'));
-            return false;
+            console.error(colors.error('Search query analysis failed:'), colors.errorOutput(error.message));
+            // Return a default analysis structure
+            return {
+                category: "security search",
+                components: [query],
+                relatedTerms: [],
+                specificVersions: [],
+                recommendedSources: ["ExploitDB", "CVE", "Security Blogs"]
+            };
         }
     }
 
-    static async visitWebsite(url, depth = 1) {
-        console.log(colors.info(`\n🌐 Visiting website: ${url}`));
-        const browser = await this.launchBrowser();
-        const visitedUrls = new Set();
-        const knowledge = [];
+    static async executeSearch(query) {
+        console.log(colors.info(`\n🔍 Analyzing search query: ${query}`));
+        
+        // Analyze the query first
+        const queryAnalysis = await this.analyzeSearchQuery(query);
+        
+        console.log(colors.info('\nSearch Strategy:'));
+        console.log(colors.analysis(JSON.stringify(queryAnalysis, null, 2)));
 
+        // Expand search terms using the analysis
+        const searchTerms = [
+            query,
+            ...queryAnalysis.relatedTerms,
+            ...queryAnalysis.components.map(c => `${c} vulnerability`)
+        ];
+
+        console.log(colors.info('\n🔍 Searching across multiple sources...'));
+        
+        // Execute searches with expanded terms
+        const searchPromises = [
+            this.searchExploitDB(query),
+            this.searchCVE(query),
+            this.searchHackerOne(query),
+            this.searchGitHub(query),
+            this.searchSecurityBlogs(query),
+            this.searchGoogle(searchTerms.join(' ')),
+            this.searchWikipedia(query)
+        ];
+
+        const results = await Promise.allSettled(searchPromises);
+        let allResults = [];
+        
+        results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value) {
+                console.log(this.formatResults(result.value));
+                allResults.push(result.value);
+            }
+        });
+
+        // Show comprehensive analysis
+        if (allResults.length > 0) {
+            console.log(colors.header('\n📊 Comprehensive Analysis'));
+            console.log(colors.info('----------------------------------------'));
+            console.log(await this.generateAnalysis(query, allResults));
+        } else {
+            console.log(colors.warning('\nNo results found across any sources.'));
+        }
+    }
+
+    static async searchHackerOne(query) {
         try {
-            const page = await browser.newPage();
-            await this.navigateToPage(page, url);
-
-            // Extract main content
-            const mainContent = await this.extractPageContent(page);
-            knowledge.push({
-                url: url,
-                title: mainContent.title,
-                content: mainContent.content,
-                links: mainContent.links
+            const response = await axios.get(`https://hackerone.com/graphql`, {
+                params: {
+                    query: `
+                        query SearchReports($query: String!) {
+                            search_queries(query: $query) {
+                                nodes {
+                                    title
+                                    severity
+                                    bounty_awarded
+                                    resolved_at
+                                }
+                            }
+                        }
+                    `,
+                    variables: { query }
+                }
             });
 
-            // Recursively visit related links if depth > 0
-            if (depth > 0 && mainContent.links.length > 0) {
-                const relatedLinks = mainContent.links
-                    .filter(link => link.startsWith(new URL(url).origin))
-                    .slice(0, 5); // Limit to 5 related links
-
-                for (const link of relatedLinks) {
-                    if (!visitedUrls.has(link)) {
-                        visitedUrls.add(link);
-                        console.log(colors.info(`\nExploring related link: ${link}`));
-                        const subPage = await browser.newPage();
-                        try {
-                            await this.navigateToPage(subPage, link);
-                            const subContent = await this.extractPageContent(subPage);
-                            knowledge.push({
-                                url: link,
-                                title: subContent.title,
-                                content: subContent.content,
-                                links: subContent.links
-                            });
-                        } catch (error) {
-                            console.log(colors.warning(`Failed to explore ${link}: ${error.message}`));
-                        } finally {
-                            await subPage.close();
-                        }
-                    }
-                }
-            }
-
             return {
+                platform: 'HackerOne',
                 success: true,
-                platform: 'Website Analysis',
-                results: knowledge
+                results: response.data.data.search_queries.nodes
             };
-
         } catch (error) {
-            console.error(colors.error('Website analysis error:'), error.message);
             return {
+                platform: 'HackerOne',
                 success: false,
-                platform: 'Website Analysis',
-                results: [],
                 error: error.message
             };
-        } finally {
-            await browser.close();
         }
     }
 
-    static async extractPageContent(page) {
-        return await page.evaluate(() => {
-            // Helper function to clean text
-            const cleanText = (text) => {
-                return text.replace(/\s+/g, ' ').trim();
-            };
+    static formatResults(results) {
+        if (!results.success) {
+            return colors.error(`\n${results.platform} Search Error: ${results.error}`);
+        }
 
-            // Get page title
-            const title = document.title;
-
-            // Get main content
-            const contentSelectors = [
-                'article',
-                'main',
-                '.content',
-                '#content',
-                '.post-content',
-                '.article-content'
-            ];
-
-            let content = '';
-            for (const selector of contentSelectors) {
-                const element = document.querySelector(selector);
-                if (element) {
-                    content = cleanText(element.textContent);
-                    break;
-                }
-            }
-
-            // If no main content found, get body text
-            if (!content) {
-                content = cleanText(document.body.textContent);
-            }
-
-            // Extract relevant links
-            const links = Array.from(document.querySelectorAll('a[href]'))
-                .map(a => a.href)
-                .filter(href => 
-                    href.startsWith('http') && 
-                    !href.includes('facebook.com') &&
-                    !href.includes('twitter.com') &&
-                    !href.includes('linkedin.com')
-                );
-
-            // Extract technical information
-            const technicalInfo = {
-                headers: Array.from(document.querySelectorAll('h1, h2, h3'))
-                    .map(h => cleanText(h.textContent)),
-                codeBlocks: Array.from(document.querySelectorAll('pre, code'))
-                    .map(c => cleanText(c.textContent)),
-                lists: Array.from(document.querySelectorAll('ul, ol'))
-                    .map(l => cleanText(l.textContent))
-            };
-
-            return {
-                title,
-                content: content.substring(0, 10000), // Limit content length
-                links,
-                technicalInfo
-            };
-        });
-    }
-
-    static formatWebsiteResults(result) {
-        let output = '';
-        output += colors.header('\n🌐 Website Analysis Results:\n');
-        output += colors.info('----------------------------------------\n');
-
-        result.results.forEach(page => {
-            output += colors.highlight(`\n${page.title}\n`);
-            output += colors.path(`URL: ${page.url}\n`);
-            output += colors.commandOutput(`Content Summary: ${page.content.substring(0, 200)}...\n`);
-            
-            if (page.technicalInfo?.headers?.length > 0) {
-                output += colors.info('\nKey Topics:\n');
-                page.technicalInfo.headers.forEach(header => {
-                    output += colors.bullet + ' ' + colors.commandOutput(header) + '\n';
-                });
-            }
-
-            if (page.technicalInfo?.codeBlocks?.length > 0) {
-                output += colors.info('\nTechnical Details Found\n');
-            }
-
-            if (page.links.length > 0) {
-                output += colors.info('\nRelated Links:\n');
-                page.links.slice(0, 3).forEach(link => {
-                    output += colors.path(`${link}\n`);
-                });
-            }
-
-            output += colors.info('----------------------------------------\n');
-        });
+        let output = colors.header(`\n${results.platform} Results:`);
+        output += colors.info('\n----------------------------------------');
+        
+        switch (results.platform) {
+            case 'Exploit-DB':
+                output += this.formatExploitDBResults(results.results);
+                break;
+            case 'CVE Database':
+                output += this.formatCVEResults(results.results);
+                break;
+            default:
+                output += typeof results.results === 'string' 
+                    ? `\n${results.results}`
+                    : `\n${JSON.stringify(results.results, null, 2)}`;
+        }
 
         return output;
     }
 
-    static async analyzeWebsiteContent(results, query) {
-        return `
-Website Analysis for: "${query}"
+    static formatExploitDBResults(results) {
+        let output = '';
+        if (typeof results === 'string') {
+            // Format searchsploit CLI output
+            const exploits = results.split('\n')
+                .filter(line => line.trim())
+                .map(line => {
+                    const [description, path] = line.split('|').map(s => s.trim());
+                    return { description, path };
+                });
 
-Content Overview:
-${results.map(page => `
-Page: ${page.title}
-URL: ${page.url}
-Key Topics:
-${page.technicalInfo?.headers?.slice(0, 5).map(h => `- ${h}`).join('\n') || 'No headers found'}
+            // Create a summary table
+            output += '\n' + this.createTable(
+                ['Description', 'Path'],
+                exploits.map(e => [e.description, e.path])
+            );
 
-Technical Information:
-${page.technicalInfo?.codeBlocks?.length ? '- Contains code examples/technical details' : '- No code examples found'}
-${page.technicalInfo?.lists?.length ? '- Contains structured information lists' : '- No structured lists found'}
-`).join('\n')}
+            // Add statistics
+            output += '\n\n' + colors.info('Statistics:');
+            output += '\n' + colors.bullet + ` Total Exploits Found: ${exploits.length}`;
+            
+            // Categorize exploits
+            const categories = exploits.reduce((acc, exp) => {
+                const category = exp.path.split('/')[0];
+                acc[category] = (acc[category] || 0) + 1;
+                return acc;
+            }, {});
 
-Please analyze this content for:
-1. Technical Insights
-   - Key technologies mentioned
-   - Technical specifications
-   - Implementation details
+            output += '\n\n' + colors.info('Categories:');
+            Object.entries(categories).forEach(([category, count]) => {
+                output += '\n' + colors.bullet + ` ${category}: ${count} exploits`;
+            });
+        }
+        return output;
+    }
 
-2. Security Implications
-   - Potential vulnerabilities
-   - Security considerations
-   - Risk factors
+    static formatCVEResults(results) {
+        let output = '';
+        if (results.vulnerabilities) {
+            const cves = results.vulnerabilities;
 
-3. Knowledge Extraction
-   - Core concepts
-   - Best practices
-   - Important findings
+            // Create summary table
+            output += '\n' + this.createTable(
+                ['CVE ID', 'Severity', 'Published'],
+                cves.map(cve => [
+                    cve.cve.id,
+                    this.getSeverityColor(cve.cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore),
+                    new Date(cve.cve.published).toLocaleDateString()
+                ])
+            );
 
-4. Recommendations
-   - Further research areas
-   - Related technologies
-   - Implementation guidance
+            // Add statistics
+            output += '\n\n' + colors.info('Statistics:');
+            output += '\n' + colors.bullet + ` Total CVEs Found: ${cves.length}`;
 
-5. Additional Context
-   - Related resources
-   - Expert opinions
-   - Community feedback
-`;
+            // Severity distribution
+            const severities = cves.reduce((acc, cve) => {
+                const severity = this.getSeverityLevel(cve.cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore);
+                acc[severity] = (acc[severity] || 0) + 1;
+                return acc;
+            }, {});
+
+            output += '\n\n' + colors.info('Severity Distribution:');
+            Object.entries(severities).forEach(([severity, count]) => {
+                output += '\n' + colors.bullet + ` ${severity}: ${count} CVEs`;
+            });
+
+            // Timeline analysis
+            output += '\n\n' + colors.info('Timeline Analysis:');
+            const timeline = this.createTimeline(cves);
+            output += '\n' + timeline;
+        }
+        return output;
+    }
+
+    static createTable(headers, rows) {
+        // Calculate column widths
+        const widths = headers.map((h, i) => 
+            Math.max(
+                h.length,
+                ...rows.map(row => (row[i] || '').toString().length)
+            )
+        );
+
+        // Create separator line
+        const separator = widths.map(w => '-'.repeat(w)).join('-+-');
+
+        // Format header
+        const headerRow = headers.map((h, i) => h.padEnd(widths[i])).join(' | ');
+
+        // Format rows
+        const formattedRows = rows.map(row =>
+            row.map((cell, i) => cell.toString().padEnd(widths[i])).join(' | ')
+        );
+
+        return colors.table([
+            headerRow,
+            separator,
+            ...formattedRows
+        ].join('\n'));
+    }
+
+    static getSeverityColor(score) {
+        if (!score) return colors.info('N/A');
+        if (score >= 9) return colors.critical(`Critical (${score})`);
+        if (score >= 7) return colors.high(`High (${score})`);
+        if (score >= 4) return colors.medium(`Medium (${score})`);
+        return colors.low(`Low (${score})`);
+    }
+
+    static getSeverityLevel(score) {
+        if (!score) return 'Unknown';
+        if (score >= 9) return 'Critical';
+        if (score >= 7) return 'High';
+        if (score >= 4) return 'Medium';
+        return 'Low';
+    }
+
+    static createTimeline(cves) {
+        const timelineData = cves
+            .sort((a, b) => new Date(a.cve.published) - new Date(b.cve.published))
+            .map(cve => ({
+                date: new Date(cve.cve.published),
+                id: cve.cve.id,
+                severity: this.getSeverityLevel(cve.cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore)
+            }));
+
+        let timeline = '';
+        let currentYear = null;
+
+        timelineData.forEach(item => {
+            const year = item.date.getFullYear();
+            if (year !== currentYear) {
+                timeline += `\n${colors.year(year)}`;
+                currentYear = year;
+            }
+            timeline += `\n${colors.bullet} ${item.date.toLocaleDateString()} - ${item.id} (${item.severity})`;
+        });
+
+        return timeline;
+    }
+
+    static async generateAnalysis(query, results) {
+        let analysis = '';
+        
+        // Overall statistics
+        const totalFindings = results.reduce((sum, r) => 
+            sum + (Array.isArray(r.results) ? r.results.length : 
+                  (typeof r.results === 'string' ? r.results.split('\n').length : 1)), 0);
+
+        // Get AI insights
+        const analyzer = new MistralAnalyzer(process.env.MISTRAL_API_KEY);
+        const aiInsights = await analyzer.analyzeOutput(`
+Analyze these security search results for "${query}":
+${JSON.stringify(results, null, 2)}
+
+Provide:
+1. Key security findings
+2. Risk assessment
+3. Attack vectors
+4. Mitigation strategies
+5. Technical details
+`);
+
+        analysis += colors.analysis(`
+Key Findings for "${query}":
+${colors.bullet} Total Results: ${totalFindings}
+${colors.bullet} Sources Searched: ${results.length}
+
+Security Implications:
+${this.analyzeSecurityImplications(results)}
+
+Risk Assessment:
+${this.analyzeRiskLevels(results)}
+
+AI Insights:
+${aiInsights}
+
+Recommendations:
+${this.generateRecommendations(query, results)}
+`);
+
+        return analysis;
+    }
+
+    static analyzeSecurityImplications(results) {
+        // Analyze and categorize findings
+        let implications = '';
+        results.forEach(result => {
+            if (result.platform === 'CVE Database' && result.results.vulnerabilities) {
+                const criticalCVEs = result.results.vulnerabilities
+                    .filter(cve => 
+                        cve.cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore >= 9
+                    );
+                if (criticalCVEs.length > 0) {
+                    implications += `\n${colors.bullet} Found ${criticalCVEs.length} Critical CVEs`;
+                }
+            }
+            if (result.platform === 'Exploit-DB') {
+                const exploitCount = typeof result.results === 'string' 
+                    ? result.results.split('\n').filter(l => l.trim()).length 
+                    : 0;
+                if (exploitCount > 0) {
+                    implications += `\n${colors.bullet} ${exploitCount} known exploits available`;
+                }
+            }
+        });
+        return implications || '\n' + colors.bullet + ' No immediate security implications found';
+    }
+
+    static analyzeRiskLevels(results) {
+        let riskAnalysis = '';
+        const riskLevels = {
+            Critical: 0,
+            High: 0,
+            Medium: 0,
+            Low: 0
+        };
+
+        results.forEach(result => {
+            if (result.platform === 'CVE Database' && result.results.vulnerabilities) {
+                result.results.vulnerabilities.forEach(cve => {
+                    const severity = this.getSeverityLevel(
+                        cve.cve.metrics?.cvssMetricV31?.[0]?.cvssData?.baseScore
+                    );
+                    riskLevels[severity] = (riskLevels[severity] || 0) + 1;
+                });
+            }
+        });
+
+        Object.entries(riskLevels).forEach(([level, count]) => {
+            if (count > 0) {
+                riskAnalysis += `\n${colors.bullet} ${level}: ${count} findings`;
+            }
+        });
+
+        return riskAnalysis || '\n' + colors.bullet + ' No risk levels identified';
+    }
+
+    static generateRecommendations(query, results) {
+        let recommendations = '';
+        
+        // Basic recommendations based on findings
+        if (results.some(r => r.platform === 'CVE Database' && r.results.vulnerabilities?.length > 0)) {
+            recommendations += `\n${colors.bullet} Regular security updates recommended`;
+            recommendations += `\n${colors.bullet} Implement vulnerability management system`;
+        }
+        
+        if (results.some(r => r.platform === 'Exploit-DB' && r.results)) {
+            recommendations += `\n${colors.bullet} Review and patch known vulnerabilities`;
+            recommendations += `\n${colors.bullet} Implement security monitoring`;
+        }
+
+        // Add general recommendations
+        recommendations += `\n${colors.bullet} Conduct regular security assessments`;
+        recommendations += `\n${colors.bullet} Monitor security advisories`;
+
+        return recommendations;
     }
 }
 
