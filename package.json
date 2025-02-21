@@ -1,0 +1,43 @@
+{
+  "name": "mask-cli",
+  "version": "1.0.0",
+  "description": "AI-Powered Cybersecurity CLI Tool",
+  "main": "index.js",
+  "bin": {
+    "mask": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest",
+    "lint": "eslint .",
+    "build": "make build",
+    "clean": "make clean",
+    "package": "make all"
+  },
+  "keywords": [
+    "cybersecurity",
+    "cli",
+    "ai",
+    "pentest",
+    "security",
+    "mistral",
+    "neo4j"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@mistralai/mistralai": "^1.5.0",
+    "axios": "^1.6.2",
+    "chalk": "^4.1.2",
+    "cheerio": "^1.0.0-rc.12",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "neo4j-driver": "^5.15.0",
+    "puppeteer": "^21.5.2",
+    "selenium-webdriver": "^4.15.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.54.0",
+    "jest": "^29.7.0"
+  }
+}

@@ -1,0 +1,41 @@
+Usage: mask [options] [command]
+
+Cybersecurity CLI tool interactive console
+
+Options:
+  -V, --version  output the version number
+  -h, --help     display help for command
+
+Commands:
+  anls           Analyze terminal logs with Mistral AI and store in Neo4j
+  oanls          Find possible situations by analyzing logs with graph database
+                 context
+  observe        Start new terminal instance and record/analyze activities
+✅ Neo4j connection successful
+✅ Mistral AI connection successful
+✅ Log directory initialized
+
+🎭 Welcome to MASK Interactive Console
+----------------------------------------
+Available commands:
+  anls     - Analyze terminal logs
+  oanls    - Analyze logs with graph context
+  observe  - Start monitored terminal session
+  chat     - Start chat session with Mistral AI
+  clear    - Clear the console
+  help     - Show this help message
+  exit     - Exit the console
+
+Penetration Testing Commands:
+  recon    - Reconnaissance tools and automation
+  vuln     - Vulnerability assessment tools
+  network  - Network analysis tools
+  exploit  - Exploitation frameworks
+  web      - Web application testing tools
+  wireless - Wireless network testing
+
+Search Commands:
+  search   - Search for security resources
+----------------------------------------
+
+mask> 
