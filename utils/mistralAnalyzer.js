@@ -3,104 +3,163 @@ const colors = require('./colors');
 
 class MistralAnalyzer {
     static async analyzeWithMistral(apiKey, content, graphContext = null) {
-        const mistral = new Mistral({
-            apiKey: apiKey
-        });
+        // Validate parameters
+        if (!apiKey) throw new Error('API key is required');
+        if (!content || typeof content !== 'string') {
+            console.error(colors.error('\n❌ Invalid content for analysis'));
+            return {
+                analysis: "No valid content to analyze",
+                error: true,
+                timestamp: new Date().toISOString()
+            };
+        }
 
-        // Show analysis progress
+        const mistral = new Mistral({ apiKey });
         console.log(colors.bullet, colors.analysisProgress('Initializing analysis...'));
-        
-        const prompt = graphContext 
-            ? `Analyze this terminal output in the context of the following graph data: ${JSON.stringify(graphContext)}\n\nTerminal output:\n${content}`
-            : `Analyze this terminal output for security implications and patterns:\n${content}`;
 
         try {
+            // Clean and prepare the content
+            const cleanContent = content.trim();
+            if (!cleanContent) {
+                return {
+                    analysis: "Empty content provided",
+                    error: true,
+                    timestamp: new Date().toISOString()
+                };
+            }
+
+            // Prepare the analysis prompt with proper structure
+            const analysisPrompt = `
+As a cybersecurity expert, analyze the following command output:
+
+${graphContext ? `Context: ${JSON.stringify(graphContext)}\n` : ''}
+Content: ${cleanContent}
+
+Provide a structured analysis including:
+1. Security Assessment:
+   - Immediate security implications
+   - Potential vulnerabilities
+   - Risk level assessment
+
+2. Technical Analysis:
+   - Key findings
+   - Notable patterns
+   - Suspicious indicators
+
+3. Recommendations:
+   - Security measures
+   - Mitigation steps
+   - Best practices
+
+4. Further Investigation:
+   - Additional tools to use
+   - Areas to explore
+   - Related security checks
+
+Please format the response in a clear, structured manner.
+`;
+
             console.log(colors.bullet, colors.analysisProgress('Sending request to Mistral AI...'));
             
             const response = await mistral.chat.complete({
                 model: "mistral-small-latest",
-                stream: false,
-                messages: [{
-                    role: "user",
-                    content: prompt
-                }],
-                response_format: { type: 'json_object' }
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are an expert cybersecurity analyst providing detailed security assessments."
+                    },
+                    {
+                        role: "user",
+                        content: analysisPrompt
+                    }
+                ],
+                temperature: 0.3,
+                max_tokens: 2048
             });
 
-            console.log(colors.bullet, colors.analysisProgress('Processing response...'));
-
-            const analysisResult = {
-                analysis: response.choices[0].message.content,
-                timestamp: new Date().toISOString(),
-                content: content
-            };
-
-            // Display formatted analysis
-            console.log('\n' + colors.header('📊 Analysis Results'));
-            console.log(colors.info('----------------------------------------'));
-            
-            try {
-                const parsedAnalysis = JSON.parse(analysisResult.analysis);
-                
-                // Display each section of the analysis
-                if (parsedAnalysis.summary) {
-                    console.log(colors.analysisSection('Summary', parsedAnalysis.summary));
-                }
-                
-                if (parsedAnalysis.security_implications) {
-                    console.log(colors.analysisSection('Security Implications', 
-                        Array.isArray(parsedAnalysis.security_implications) 
-                            ? parsedAnalysis.security_implications.join('\n  • ')
-                            : parsedAnalysis.security_implications
-                    ));
-                }
-                
-                if (parsedAnalysis.recommendations) {
-                    console.log(colors.analysisSection('Recommendations',
-                        Array.isArray(parsedAnalysis.recommendations)
-                            ? parsedAnalysis.recommendations.join('\n  • ')
-                            : parsedAnalysis.recommendations
-                    ));
-                }
-                
-                console.log(colors.info('----------------------------------------'));
-            } catch {
-                // Fallback for non-JSON responses
-                console.log(colors.analysisResult(analysisResult.analysis));
+            if (!response?.choices?.[0]?.message?.content) {
+                throw new Error('Invalid response from Mistral AI');
             }
 
-            return analysisResult;
+            return {
+                analysis: response.choices[0].message.content,
+                timestamp: new Date().toISOString(),
+                error: false
+            };
+
         } catch (error) {
-            console.error(colors.error('Error querying Mistral API:'), colors.errorOutput(error));
-            throw error;
+            console.error(colors.error('\n❌ Mistral AI Error:'), colors.errorOutput(error.message));
+            return {
+                analysis: `Analysis failed: ${error.message}`,
+                error: true,
+                timestamp: new Date().toISOString()
+            };
         }
     }
 
-    static async chatWithMistral(apiKey, userMessage) {
-        const mistral = new Mistral({
-            apiKey: apiKey
-        });
+    static formatSection(section) {
+        if (Array.isArray(section)) {
+            return section.map(item => `• ${item}`).join('\n');
+        } else if (typeof section === 'object') {
+            return Object.entries(section)
+                .map(([key, value]) => `${key}:\n${Array.isArray(value) ? 
+                    value.map(item => `  • ${item}`).join('\n') : 
+                    `  • ${value}`}`)
+                .join('\n\n');
+        }
+        return section;
+    }
 
-        console.log(colors.bullet, colors.analysisProgress('Sending message to Mistral AI...'));
-        
+    static async chatWithMistral(apiKey, userMessage, history = []) {
+        if (!apiKey) throw new Error('API key is required');
+        if (!userMessage || typeof userMessage !== 'string') {
+            return {
+                response: "Invalid message provided",
+                error: true,
+                timestamp: new Date().toISOString()
+            };
+        }
+
         try {
+            const mistral = new Mistral({ apiKey });
+            console.log(colors.bullet, colors.analysisProgress('Processing chat message...'));
+
+            const messages = [
+                {
+                    role: "system",
+                    content: "You are a cybersecurity expert assistant providing detailed security guidance and analysis."
+                },
+                ...history,
+                {
+                    role: "user",
+                    content: userMessage.trim()
+                }
+            ];
+
             const response = await mistral.chat.complete({
                 model: "mistral-small-latest",
-                stream: false,
-                messages: [{
-                    role: "user",
-                    content: userMessage
-                }]
+                messages: messages,
+                temperature: 0.7,
+                max_tokens: 2048
             });
+
+            if (!response?.choices?.[0]?.message?.content) {
+                throw new Error('Invalid response from Mistral AI');
+            }
 
             return {
                 response: response.choices[0].message.content,
                 timestamp: new Date().toISOString(),
-                query: userMessage
+                error: false
             };
+
         } catch (error) {
-            console.error(colors.error('Error chatting with Mistral AI:'), colors.errorOutput(error));
-            throw error;
+            console.error(colors.error('\n❌ Chat Error:'), colors.errorOutput(error.message));
+            return {
+                response: "An error occurred during the chat. Please try again.",
+                error: true,
+                timestamp: new Date().toISOString()
+            };
         }
     }
 }

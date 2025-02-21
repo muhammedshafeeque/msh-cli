@@ -4,6 +4,9 @@ const execPromise = util.promisify(exec);
 const colors = require('./colors');
 const { analyzeWithMistral } = require('./mistralAnalyzer');
 const { storeInNeo4j } = require('./neo4jHandler');
+const SearchCommands = require('./searchCommands');
+const CodeAnalyzer = require('./codeAnalyzer');
+const question = require('./question');
 
 class CommandExecutor {
     static async executeCommand(command) {
@@ -131,6 +134,15 @@ class CommandExecutor {
     }
 
     static async analyzeChunk(chunk, command, apiKey, chunkIndex, totalChunks) {
+        if (!chunk || !command || !apiKey) {
+            throw new Error('Missing required parameters for chunk analysis');
+        }
+
+        // Skip empty chunks
+        if (!chunk.trim()) {
+            return null;
+        }
+
         const context = `
         This is part ${chunkIndex + 1} of ${totalChunks} from the command output.
         
@@ -146,10 +158,23 @@ class CommandExecutor {
         5. Notable patterns or indicators in this section
         `;
 
-        return await analyzeWithMistral(apiKey, context);
+        try {
+            const analysis = await analyzeWithMistral(apiKey, context);
+            if (!analysis || analysis.error) {
+                throw new Error('Analysis failed for this chunk');
+            }
+            return analysis;
+        } catch (error) {
+            console.error(colors.error(`\nError analyzing chunk ${chunkIndex + 1}:`), colors.errorOutput(error.message));
+            return null;
+        }
     }
 
     static async consolidateAnalysis(analyses, command, apiKey) {
+        if (!analyses || !analyses.length || !command || !apiKey) {
+            throw new Error('Missing required parameters for analysis consolidation');
+        }
+
         const consolidationContext = `
         Please consolidate the following security analyses into a comprehensive summary.
         These analyses are from different parts of the output of command: ${command}
@@ -168,10 +193,204 @@ class CommandExecutor {
         5. Suggested next steps for investigation
         `;
 
-        return await analyzeWithMistral(apiKey, consolidationContext);
+        try {
+            return await analyzeWithMistral(apiKey, consolidationContext);
+        } catch (error) {
+            console.error(colors.error('Error consolidating analyses:'), colors.errorOutput(error.message));
+            return {
+                analysis: `Error consolidating analyses: ${error.message}`,
+                timestamp: new Date().toISOString()
+            };
+        }
     }
 
     static async executeWithAnalysis(command, apiKey, driver) {
+        if (!command || !apiKey || !driver) {
+            throw new Error('Missing required parameters: command, apiKey, and driver are required');
+        }
+
+        // Special handling for search command
+        if (command.startsWith('search')) {
+            try {
+                // Check if searchsploit is installed
+                try {
+                    await execPromise('which searchsploit');
+                } catch {
+                    console.log(colors.warning('\nSearchsploit not found. Installing required tools...'));
+                    try {
+                        await execPromise('sudo apt-get update && sudo apt-get install -y exploitdb');
+                        console.log(colors.success('✓ Searchsploit installed successfully'));
+                    } catch (installError) {
+                        console.log(colors.warning('Failed to install searchsploit. Continuing with web-based search...'));
+                    }
+                }
+
+                const searchQuery = command.replace(/^search\s*:?\s*/, '').trim();
+                if (!searchQuery) {
+                    console.error(colors.error('\n❌ Error: Search query is required'));
+                    return { success: false, error: 'Search query is required' };
+                }
+
+                console.log(colors.info('\n🔍 Searching across multiple sources...'));
+                console.log(colors.info('----------------------------------------'));
+
+                const results = [];
+
+                // Parallel search execution
+                const searchPromises = [
+                    // Web searches
+                    SearchCommands.searchGoogle(searchQuery),
+                    SearchCommands.searchDuckDuckGo(searchQuery),
+                    SearchCommands.searchWikipedia(searchQuery),
+                    
+                    // Security-specific searches
+                    SearchCommands.searchExploitDB(searchQuery),
+                    SearchCommands.searchCVE(searchQuery),
+                    SearchCommands.searchSecurityBlogs(searchQuery)
+                ];
+
+                const searchResults = await Promise.allSettled(searchPromises);
+                
+                // Process results
+                searchResults.forEach(result => {
+                    if (result.status === 'fulfilled' && result.value.success) {
+                        results.push(result.value);
+                        console.log(colors.success(`✓ ${result.value.platform} search complete`));
+                    }
+                });
+
+                // Format and display results
+                results.forEach(result => {
+                    console.log(SearchCommands.formatSearchResults(result));
+                });
+
+                // Analyze results with Mistral AI
+                if (results.length > 0) {
+                    const searchAnalysis = await SearchCommands.analyzeSearchResults(results, searchQuery);
+                    const analysis = await analyzeWithMistral(apiKey, searchAnalysis);
+
+                    console.log(colors.header('\n📊 AI Analysis'));
+                    console.log(colors.info('----------------------------------------'));
+                    console.log(colors.analysis(analysis.analysis));
+
+                    // Store in Neo4j
+                    await storeInNeo4j(driver, {
+                        type: 'search',
+                        query: searchQuery,
+                        results: results,
+                        analysis: analysis.analysis,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+
+                return { success: true, results };
+
+            } catch (error) {
+                console.error(colors.error('\n❌ Search Error:'), colors.errorOutput(error.message));
+                return { success: false, error: error.message };
+            }
+        }
+
+        // Add new handling for visit command
+        if (command.startsWith('visit')) {
+            try {
+                const url = command.replace(/^visit\s*/, '').trim();
+                if (!url) {
+                    console.error(colors.error('\n❌ Error: URL is required'));
+                    return { success: false, error: 'URL is required' };
+                }
+
+                console.log(colors.info('\n🔍 Analyzing website content...'));
+                const results = await SearchCommands.visitWebsite(url, 2); // Depth of 2
+
+                if (results.success) {
+                    console.log(SearchCommands.formatWebsiteResults(results));
+
+                    // Analyze with Mistral AI
+                    const analysis = await analyzeWithMistral(
+                        apiKey,
+                        await SearchCommands.analyzeWebsiteContent(results.results, url)
+                    );
+
+                    console.log(colors.header('\n📊 AI Analysis'));
+                    console.log(colors.info('----------------------------------------'));
+                    console.log(colors.analysis(analysis.analysis));
+
+                    // Store in Neo4j
+                    await storeInNeo4j(driver, {
+                        type: 'website_analysis',
+                        url: url,
+                        results: results.results,
+                        analysis: analysis.analysis,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+
+                return results;
+            } catch (error) {
+                console.error(colors.error('\n❌ Website Analysis Error:'), colors.errorOutput(error.message));
+                return { success: false, error: error.message };
+            }
+        }
+
+        // Add to the command handling section
+        if (command.startsWith('debug')) {
+            try {
+                const args = command.split(' ');
+                if (args.length < 2) {
+                    console.error(colors.error('\n❌ Error: Specify what to debug'));
+                    return { success: false, error: 'Invalid debug command' };
+                }
+
+                const target = args[1];
+                
+                if (target === 'code') {
+                    // Analyze entire codebase
+                    const analysis = await CodeAnalyzer.analyzeCodebase(apiKey);
+                    
+                    if (analysis) {
+                        console.log(colors.header('\n📊 Code Analysis Results'));
+                        console.log(colors.info('----------------------------------------'));
+                        
+                        for (const [file, result] of Object.entries(analysis)) {
+                            console.log(colors.highlight(`\n${file}:`));
+                            console.log(colors.analysis(JSON.stringify(result, null, 2)));
+
+                            if (result.fixes && result.fixes.length > 0) {
+                                const shouldApply = await question(colors.prompt(
+                                    '\nApply suggested fixes? (y/n): '
+                                ));
+
+                                if (shouldApply.toLowerCase() === 'y') {
+                                    await CodeAnalyzer.applyCodeFix(file, result.fixes, apiKey);
+                                }
+                            }
+                        }
+                    }
+                } else if (target === 'function') {
+                    // Debug specific function
+                    const functionName = args[2];
+                    if (!functionName) {
+                        console.error(colors.error('\n❌ Error: Specify function name'));
+                        return { success: false, error: 'Function name required' };
+                    }
+
+                    const testCases = [
+                        { input: 'test input 1', expectedOutput: 'expected output 1' },
+                        { input: 'test input 2', expectedOutput: 'expected output 2' }
+                    ];
+
+                    await CodeAnalyzer.debugFunction(functionName, testCases, apiKey);
+                }
+
+                return { success: true };
+            } catch (error) {
+                console.error(colors.error('\n❌ Debug Error:'), colors.errorOutput(error.message));
+                return { success: false, error: error.message };
+            }
+        }
+
+        // Handle other commands as before...
         console.log(colors.command(`\n📎 Executing: ${command}`));
         const result = await this.executeCommand(command);
         
@@ -187,12 +406,14 @@ class CommandExecutor {
 
             try {
                 // Split large output into chunks
-                const chunks = this.splitOutput(result.output);
+                const chunks = this.splitOutput(result.output || '');
                 console.log(colors.info(`\nAnalyzing output in ${chunks.length} parts...`));
 
                 // Analyze each chunk
                 const chunkAnalyses = [];
                 for (let i = 0; i < chunks.length; i++) {
+                    if (!chunks[i].trim()) continue; // Skip empty chunks
+
                     console.log(colors.info(`\nAnalyzing part ${i + 1}/${chunks.length}...`));
                     const analysis = await this.analyzeChunk(
                         chunks[i],
@@ -201,14 +422,23 @@ class CommandExecutor {
                         i,
                         chunks.length
                     );
-                    chunkAnalyses.push(analysis);
+                    if (analysis && !analysis.error) {
+                        chunkAnalyses.push(analysis);
+                    }
+                }
 
-                    // Show intermediate analysis if multiple chunks
-                    if (chunks.length > 1) {
-                        console.log(colors.header(`\n📊 Analysis Part ${i + 1}`));
+                if (chunkAnalyses.length === 0) {
+                    console.log(colors.warning('\nNo analyzable content found in the output.'));
+                    return result;
+                }
+
+                // Show intermediate analysis if multiple chunks
+                if (chunks.length > 1) {
+                    chunkAnalyses.forEach((analysis, index) => {
+                        console.log(colors.header(`\n📊 Analysis Part ${index + 1}`));
                         console.log(colors.info('----------------------------------------'));
                         console.log(colors.analysis(analysis.analysis));
-                    }
+                    });
                 }
 
                 // Consolidate analyses if multiple chunks
@@ -216,45 +446,50 @@ class CommandExecutor {
                     ? await this.consolidateAnalysis(chunkAnalyses, command, apiKey)
                     : chunkAnalyses[0];
 
-                console.log(colors.header('\n📊 Final Analysis'));
-                console.log(colors.info('----------------------------------------'));
-                console.log(colors.analysis(finalAnalysis.analysis));
+                if (finalAnalysis && !finalAnalysis.error) {
+                    console.log(colors.header('\n📊 Final Analysis'));
+                    console.log(colors.info('----------------------------------------'));
+                    console.log(colors.analysis(finalAnalysis.analysis));
 
-                // Store in Neo4j
-                await storeInNeo4j(driver, {
-                    type: 'command',
-                    command: command,
-                    output: result.output,
-                    error: result.error,
-                    analysis: finalAnalysis.analysis,
-                    chunkAnalyses: chunks.length > 1 ? chunkAnalyses.map(a => a.analysis) : [],
-                    timestamp: new Date().toISOString()
-                });
+                    // Store in Neo4j
+                    await storeInNeo4j(driver, {
+                        type: 'command',
+                        command: command,
+                        output: result.output,
+                        error: result.error,
+                        analysis: finalAnalysis.analysis,
+                        chunkAnalyses: chunks.length > 1 ? chunkAnalyses.map(a => a.analysis) : [],
+                        timestamp: new Date().toISOString()
+                    });
 
-                // Get next steps suggestions
-                const nextStepsContext = `
-                Based on the complete analysis of this command:
-                Command: ${command}
-                
-                Final Analysis:
-                ${finalAnalysis.analysis}
+                    // Get next steps suggestions based on valid analysis
+                    const nextStepsContext = `
+                    Based on the complete analysis of this command:
+                    Command: ${command}
+                    
+                    Final Analysis:
+                    ${finalAnalysis.analysis}
 
-                Please suggest:
-                1. Next security testing steps
-                2. Related security tools to try
-                3. Additional areas to investigate
-                4. Security checks to perform
-                5. Potential vulnerabilities to explore
-                `;
+                    Please suggest:
+                    1. Next security testing steps
+                    2. Related security tools to try
+                    3. Additional areas to investigate
+                    4. Security checks to perform
+                    5. Potential vulnerabilities to explore
+                    `;
 
-                const nextSteps = await analyzeWithMistral(apiKey, nextStepsContext);
+                    const nextSteps = await analyzeWithMistral(apiKey, nextStepsContext);
 
-                console.log(colors.header('\n📋 Suggested Next Steps'));
-                console.log(colors.info('----------------------------------------'));
-                console.log(colors.analysis(nextSteps.analysis));
+                    if (nextSteps && !nextSteps.error) {
+                        console.log(colors.header('\n📋 Suggested Next Steps'));
+                        console.log(colors.info('----------------------------------------'));
+                        console.log(colors.analysis(nextSteps.analysis));
+                    }
+                }
 
             } catch (error) {
-                console.error(colors.error('Error during analysis:'), colors.errorOutput(error.message));
+                console.error(colors.error('\nError during analysis:'), colors.errorOutput(error.message));
+                console.log(colors.info('\nContinuing with basic output display...'));
             }
         } else {
             console.error(colors.error('\n❌ Error executing command:'), colors.errorOutput(result.error));
