@@ -7,6 +7,7 @@ const { storeInNeo4j } = require('./neo4jHandler');
 const SearchCommands = require('./searchCommands');
 const CodeAnalyzer = require('./codeAnalyzer');
 const question = require('./question');
+const HackingCommands = require('./hackingCommands');
 
 class CommandExecutor {
     static async executeCommand(command) {
@@ -535,6 +536,34 @@ async function executeCommand(command) {
         // Handle special commands
         if (specialCommands[command]) {
             return specialCommands[command]();
+        }
+
+        // Handle hk command
+        if (command.startsWith('hk')) {
+            const args = command.split(' ');
+            if (args.length < 2) {
+                console.error(colors.error('\n❌ Error: IP address required'));
+                console.log(colors.info('Usage: hk <ip> [port]'));
+                return false;
+            }
+
+            const ip = args[1];
+            const port = args[2] || null;
+
+            // Validate IP address
+            if (!ip.match(/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/)) {
+                console.error(colors.error('\n❌ Error: Invalid IP address'));
+                return false;
+            }
+
+            // Validate port if provided
+            if (port && (!Number.isInteger(+port) || +port < 1 || +port > 65535)) {
+                console.error(colors.error('\n❌ Error: Invalid port number'));
+                return false;
+            }
+
+            await HackingCommands.startHackingMode(ip, port);
+            return true;
         }
 
         // Execute system command
