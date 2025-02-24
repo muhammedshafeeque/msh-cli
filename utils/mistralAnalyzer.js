@@ -6,22 +6,49 @@ class MistralAnalyzer {
         this.client = new Mistral({
             apiKey: apiKey
         });
+        this.requestQueue = [];
+        this.isProcessing = false;
+        this.retryDelay = 2000; // Start with 2 seconds
+        this.maxRetries = 5;
+        this.maxRetryDelay = 32000; // Max 32 seconds
     }
 
     async analyzeOutput(output, type = 'detailed') {
-        try {
-            const context = type === 'summary' ? this.getSummaryPrompt(output) : this.getDetailedPrompt(output);
-            
-            const response = await this.client.chat.complete({
-                model: "mistral-small-latest",
-                messages: [{ role: "user", content: context }],
-                stream: false
-            });
+        let retries = 0;
+        let delay = this.retryDelay;
 
-            return response.choices[0].message.content;
-        } catch (error) {
-            throw new Error(`Analysis failed: ${error.message}`);
+        while (retries < this.maxRetries) {
+            try {
+                const context = type === 'summary' ? 
+                    this.getSummaryPrompt(output) : 
+                    this.getDetailedPrompt(output);
+                
+                if (retries > 0) {
+                    console.log(colors.info(`Attempt ${retries + 1} of ${this.maxRetries}...`));
+                }
+
+                const response = await this.client.chat.complete({
+                    model: "mistral-small-latest",
+                    messages: [{ role: "user", content: context }],
+                    stream: false,
+                    max_tokens: 2048
+                });
+
+                return response.choices[0].message.content;
+
+            } catch (error) {
+                if (error.message.includes('rate limit') && retries < this.maxRetries - 1) {
+                    console.log(colors.warning(`\nRate limit reached, waiting ${delay/1000} seconds...`));
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay = Math.min(delay * 2, this.maxRetryDelay);
+                    retries++;
+                    continue;
+                }
+                throw error;
+            }
         }
+
+        throw new Error('Maximum retry attempts reached');
     }
 
     getDetailedPrompt(output) {
@@ -211,6 +238,44 @@ Please format the response in a clear, structured manner.
                 timestamp: new Date().toISOString()
             };
         }
+    }
+
+    // Add queue processing method
+    async processQueue() {
+        if (this.isProcessing || this.requestQueue.length === 0) {
+            return;
+        }
+
+        this.isProcessing = true;
+
+        try {
+            const request = this.requestQueue.shift();
+            await request();
+        } finally {
+            this.isProcessing = false;
+            if (this.requestQueue.length > 0) {
+                // Wait before processing next request
+                setTimeout(() => this.processQueue(), 1000);
+            }
+        }
+    }
+
+    // Add request to queue
+    async queueRequest(request) {
+        return new Promise((resolve, reject) => {
+            this.requestQueue.push(async () => {
+                try {
+                    const result = await request();
+                    resolve(result);
+                } catch (error) {
+                    reject(error);
+                }
+            });
+
+            if (!this.isProcessing) {
+                this.processQueue();
+            }
+        });
     }
 }
 

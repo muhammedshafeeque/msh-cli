@@ -15,6 +15,7 @@ const { executeCommand, handleAnalysisCommand } = require('./utils/commandExecut
 const colors = require('./utils/colors');
 const PentestCommands = require('./utils/pentestCommands');
 const SearchCommands = require('./utils/searchCommands');
+const { execSync } = require('child_process');
 
 // Create readline interface for user input
 const rl = createInterface({
@@ -23,6 +24,23 @@ const rl = createInterface({
 });
 
 const question = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+// Add root permission check function
+async function checkRootPermissions() {
+    try {
+        const userId = execSync('id -u').toString().trim();
+        if (userId !== '0') {
+            console.log(colors.error('\n❌ Error: Root permissions required'));
+            console.log(colors.info('Please run the tool with sudo:'));
+            console.log(colors.command('sudo mask'));
+            process.exit(1);
+        }
+        return true;
+    } catch (error) {
+        console.error(colors.error('\n❌ Error checking permissions:'), colors.errorOutput(error.message));
+        process.exit(1);
+    }
+}
 
 // Function to check and setup environment variables
 async function setupEnvironment() {
@@ -89,12 +107,17 @@ program
     .description('Cybersecurity CLI tool interactive console')
     .action(async () => {
         try {
+            // Check root permissions first
+            await checkRootPermissions();
+            console.log(colors.success('✓ Root permissions verified'));
+            console.log(colors.warning('\n⚠️ Warning: This tool should only be used on authorized systems'));
+
             const { apiKey, driver } = await getClients();
 
             // Check connections
             const session = driver.session();
             await session.run('RETURN 1');
-            console.log(colors.success('✅ Neo4j connection successful'));
+            console.log(colors.success('✓ Neo4j connection successful'));
             session.close();
 
             // Test Mistral AI connection
@@ -106,12 +129,18 @@ program
                 messages: [{ role: "user", content: "test" }],
                 stream: false
             });
-            console.log(colors.success('✅ Mistral AI connection successful'));
+            console.log(colors.success('✓ Mistral AI connection successful'));
 
             // Create log directory if it doesn't exist
             const logDir = path.join(process.env.HOME, '.cybersec-cli');
             await fs.mkdir(logDir, { recursive: true });
-            console.log(colors.success('✅ Log directory initialized'));
+            console.log(colors.success('✓ Log directory initialized'));
+
+            // Display banner
+            console.log(colors.header('\n🎭 MASK - Advanced Security CLI'));
+            console.log(colors.info('----------------------------------------'));
+            console.log(colors.warning('⚠️  For authorized penetration testing only'));
+            console.log(colors.info('----------------------------------------\n'));
 
             // Start the interactive console
             await startInteractiveConsole(apiKey, driver);
@@ -131,6 +160,7 @@ program
     .description('Analyze terminal logs with Mistral AI and store in Neo4j')
     .action(async () => {
         try {
+            await checkRootPermissions();
             const { apiKey, driver } = await getClients();
             const logs = await createTerminalLogger().getRecentLogs();
             const analysis = await analyzeWithMistral(apiKey, logs);
@@ -147,6 +177,7 @@ program
     .description('Find possible situations by analyzing logs with graph database context')
     .action(async () => {
         try {
+            await checkRootPermissions();
             const { apiKey, driver } = await getClients();
             const logs = await createTerminalLogger().getRecentLogs();
             const graphContext = await storeInNeo4j.getGraphContext(driver);
@@ -163,6 +194,7 @@ program
     .description('Start new terminal instance and record/analyze activities')
     .action(async () => {
         try {
+            await checkRootPermissions();
             const { apiKey, driver } = await getClients();
             const terminalLogger = createTerminalLogger();
             

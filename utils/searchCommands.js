@@ -9,6 +9,7 @@ const colors = require('./colors');
 const axios = require('axios');
 const { execSync } = require('child_process');
 const { MistralAnalyzer } = require('./mistralAnalyzer');
+const HackCommand = require('./hackCommand');
 
 class SearchCommands {
     static async launchBrowser() {
@@ -875,6 +876,11 @@ ${this.generateRecommendations(query, results)}
         recommendations += `\n${colors.bullet} Monitor security advisories`;
 
         return recommendations;
+    }
+
+    static async executeHackCommand(ip, port) {
+        const hackCommand = new HackCommand();
+        await hackCommand.execute(ip, port);
     }
 }
 

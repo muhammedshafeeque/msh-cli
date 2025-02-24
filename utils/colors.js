@@ -64,7 +64,10 @@ const colors = {
     low: (text) => chalk.green(text),
     table: (text) => chalk.cyan(text),
     year: (text) => chalk.blue.bold(text),
-    analysis: (text) => chalk.cyan(text)
+    analysis: (text) => chalk.cyan(text),
+    subheader: (text) => `\x1b[36m${text}\x1b[0m`,
+    table: (text) => `\x1b[37m${text}\x1b[0m`,
+    analysis: (text) => `\x1b[38;5;147m${text}\x1b[0m`
 };
 
 module.exports = colors; 

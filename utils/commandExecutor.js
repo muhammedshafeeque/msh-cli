@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
 const colors = require('./colors');
@@ -540,6 +540,20 @@ async function executeCommand(command) {
 
         // Handle hk command
         if (command.startsWith('hk')) {
+            // Check root permissions first
+            try {
+                const userId = execSync('id -u').toString().trim();
+                if (userId !== '0') {
+                    console.error(colors.error('\n❌ Error: Root permissions required'));
+                    console.log(colors.info('Please run the tool with sudo:'));
+                    console.log(colors.command('sudo mask'));
+                    return false;
+                }
+            } catch (error) {
+                console.error(colors.error('\n❌ Error checking permissions:'), colors.errorOutput(error.message));
+                return false;
+            }
+
             const args = command.split(' ');
             if (args.length < 2) {
                 console.error(colors.error('\n❌ Error: IP address required'));
